@@ -1,46 +1,47 @@
 # Notifica push quando c'e' una finestra stabile di surplus, per carichi manuali
 # (lavatrice, lavastoviglie, asciugatrice, forno).
 
-- id: pv_surplus_notify_window_open
-  alias: "PV surplus - finestra carichi manuali (apre)"
-  mode: single
-  trigger:
-    - platform: numeric_state
-      entity_id: sensor.pv_surplus_avg_15min
-      above: input_number.surplus_threshold_notify
-      for:
-        minutes: 15
-  condition:
-    - condition: state
-      entity_id: input_boolean.optimizer_enabled
-      state: "on"
-  action:
-    - service: notify.mobile_app   # REPLACE: notify.mobile_app_<device-id>
-      data:
-        title: "Finestra surplus FV"
-        message: >
-          Surplus {{ states('sensor.pv_surplus_avg_15min') | int }} W stabile da 15 min.
-          Buon momento per lavatrice/lavastoviglie/asciugatrice.
+automation:
+  - id: pv_surplus_notify_window_open
+    alias: "PV surplus - finestra carichi manuali (apre)"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.pv_surplus_avg_15min
+        above: input_number.surplus_threshold_notify
+        for:
+          minutes: 15
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+    action:
+      - service: notify.mobile_app   # REPLACE: notify.mobile_app_<device-id>
         data:
-          tag: pv_surplus_window
-          channel: Energy
-          actions:
-            - action: URI
-              title: "Apri dashboard"
-              uri: "/lovelace/energy"
+          title: "Finestra surplus FV"
+          message: >
+            Surplus {{ states('sensor.pv_surplus_avg_15min') | int }} W stabile da 15 min.
+            Buon momento per lavatrice/lavastoviglie/asciugatrice.
+          data:
+            tag: pv_surplus_window
+            channel: Energy
+            actions:
+              - action: URI
+                title: "Apri dashboard"
+                uri: "/lovelace/energy"
 
-- id: pv_surplus_notify_window_close
-  alias: "PV surplus - finestra carichi manuali (chiude)"
-  mode: single
-  trigger:
-    - platform: numeric_state
-      entity_id: sensor.pv_surplus_avg_15min
-      below: 300
-      for:
-        minutes: 10
-  action:
-    - service: notify.mobile_app   # REPLACE
-      data:
-        message: clear_notification
+  - id: pv_surplus_notify_window_close
+    alias: "PV surplus - finestra carichi manuali (chiude)"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.pv_surplus_avg_15min
+        below: 300
+        for:
+          minutes: 10
+    action:
+      - service: notify.mobile_app   # REPLACE
         data:
-          tag: pv_surplus_window
+          message: clear_notification
+          data:
+            tag: pv_surplus_window

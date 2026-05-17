@@ -1,0 +1,168 @@
+# ACS solar-following scheduler.
+#
+# Obiettivo: spostare la produzione di acqua calda dalla notte (default Eco+
+# della PdC) alle ore di sole, MANTENENDO lo stesso volume di kWh termici
+# prodotti al giorno. Niente target piu' alti, niente boost piu' lunghi -
+# solo timing diverso.
+#
+# State machine giornaliera (default, regolabile via helpers):
+#   00:00-09:00  Off          (sopprime riscaldamento notturno)
+#   10:00        Comfort      (se forecast solar OK e ACS sotto target)
+#   anytime      Off          (quando ACS raggiunge target naturale 47 C)
+#   15:00        Eco+         (top-up serale se la giornata era nuvolosa)
+#   22:00        Off          (chiude la finestra prima della notte)
+#
+# Safety: se temp ACS scende sotto soglia (default 38 C), forza Eco+
+# indipendentemente dall'ora -> niente docce fredde.
+
+automation:
+  # 1. Soppressione notturna - solo se siamo gia' al target ed e' notte
+  - id: acs_night_suppression
+    alias: "ACS: sopprimi riscaldamento notturno"
+    mode: single
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Off"
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Notte: modo Off. ACS attuale {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
+
+  # 2. Finestra solare aperta - tenta riscaldamento se forecast solar dice OK
+  - id: acs_solar_window_open
+    alias: "ACS: avvia riscaldamento in finestra solare"
+    mode: single
+    trigger:
+      - platform: time
+        at: "10:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+      # Forecast Solar deve prevedere produzione residua sufficiente
+      - condition: numeric_state
+        entity_id: sensor.energy_production_today_remaining
+        above: input_number.acs_min_forecast_kwh
+      # ACS deve essere sotto il target naturale (non e' gia' caldo)
+      - condition: numeric_state
+        entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
+        below: input_number.acs_target_temp_natural
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Comfort"
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Finestra solare aperta. Forecast residuo:
+            {{ states('sensor.energy_production_today_remaining') }} kWh.
+            ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C
+            -> Comfort.
+
+  # 3. Stop quando target naturale raggiunto - non sovrariscaldiamo
+  - id: acs_solar_target_reached
+    alias: "ACS: target raggiunto, ferma riscaldamento"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
+        above: input_number.acs_target_temp_natural
+        for:
+          minutes: 1
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+      - condition: state
+        entity_id: water_heater.boschcom_k30_101794077_waterheater
+        state: "Comfort"
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Off"
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Target naturale raggiunto
+            ({{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C).
+            Stop riscaldamento.
+
+  # 4. Top-up serale - se la giornata era nuvolosa, Eco+ recupera prima di notte
+  - id: acs_evening_topup
+    alias: "ACS: finestra recupero serale"
+    mode: single
+    trigger:
+      - platform: time
+        at: "15:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Eco+"
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Top-up serale: Eco+. ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
+
+  # 5. Safety fallback - mai docce fredde, override se ACS sotto soglia
+  - id: acs_safety_fallback
+    alias: "ACS: safety fallback su temperatura critica"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
+        below: input_number.acs_safety_min_temp
+        for:
+          minutes: 2
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: water_heater.boschcom_k30_101794077_waterheater
+            state: "Eco+"
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Eco+"
+      - service: persistent_notification.create
+        data:
+          title: "ACS safety override"
+          message: >
+            ACS sceso sotto soglia di sicurezza
+            ({{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C).
+            Forzato Eco+ per evitare docce fredde.
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Safety override: temp ACS critica
+            ({{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C)
+            -> Eco+.

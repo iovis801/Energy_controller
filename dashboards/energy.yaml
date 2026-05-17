@@ -93,9 +93,9 @@ views:
       - type: entities
         title: Pompa di calore
         entities:
-          - entity: climate.boschcom_k30_101794077_hc1   # REPLACE
-          - entity: water_heater.boschcom_k30_101794077_dhw1    # REPLACE
-          - entity: sensor.boschcom_k30_101794077_dhw1_sensor    # REPLACE
+          - entity: climate.boschcom_k30_101794077_hc1
+          - entity: water_heater.boschcom_k30_101794077_waterheater
+          - entity: sensor.boschcom_k30_101794077_dhw1_sensor
 
   - title: Energy native
     path: energy-native
