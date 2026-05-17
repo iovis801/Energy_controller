@@ -1,0 +1,104 @@
+# Dashboard Lovelace per ottimizzazione energetica.
+# Da importare via UI: Settings -> Dashboards -> Add -> "Take control" + paste YAML,
+# oppure linkare nel lovelace.yaml come dashboard separata.
+#
+# Richiede HACS frontend: apexcharts-card, mushroom, mini-graph-card.
+
+title: Energy
+views:
+  - title: Overview
+    path: energy
+    icon: mdi:solar-power
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: custom:mushroom-template-card
+            primary: >
+              {% set s = states('sensor.pv_surplus') | float(0) %}
+              {% if s > 1500 %}Surplus alto
+              {% elif s > 500 %}Surplus moderato
+              {% elif s > 0 %}Surplus minimo
+              {% else %}Nessun surplus
+              {% endif %}
+            secondary: "{{ states('sensor.pv_surplus') | int }} W disponibili"
+            icon: >
+              {% set s = states('sensor.pv_surplus') | float(0) %}
+              {% if s > 1500 %}mdi:weather-sunny
+              {% elif s > 500 %}mdi:weather-partly-cloudy
+              {% else %}mdi:weather-night
+              {% endif %}
+            icon_color: >
+              {% set s = states('sensor.pv_surplus') | float(0) %}
+              {% if s > 1500 %}green
+              {% elif s > 500 %}amber
+              {% else %}grey
+              {% endif %}
+
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.sb4_0_1av_41_576_grid_power
+                name: Produzione FV
+                icon: mdi:solar-panel
+              - type: custom:mushroom-entity-card
+                entity: sensor.home_consumption
+                name: Consumo casa
+                icon: mdi:home-lightning-bolt
+              - type: custom:mushroom-entity-card
+                entity: sensor.grid_import
+                name: Import rete
+                icon: mdi:transmission-tower-import
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Surplus FV (ultime 24h)"
+        graph_span: 24h
+        update_interval: 30s
+        series:
+          - entity: sensor.sb4_0_1av_41_576_grid_power
+            name: Produzione FV
+            color: orange
+            stroke_width: 2
+            extend_to: now
+          - entity: sensor.home_consumption
+            name: Consumo casa
+            color: blue
+            stroke_width: 2
+            extend_to: now
+          - entity: sensor.pv_surplus
+            name: Surplus
+            color: green
+            stroke_width: 1
+            type: area
+            opacity: 0.3
+            extend_to: now
+
+      - type: entities
+        title: Controlli ottimizzatore
+        entities:
+          - entity: input_boolean.optimizer_enabled
+          - entity: input_boolean.acs_boost_active
+          - entity: input_boolean.heating_boost_active
+          - type: divider
+          - entity: input_number.surplus_threshold_acs_boost
+          - entity: input_number.surplus_threshold_heatpump
+          - entity: input_number.surplus_threshold_notify
+          - entity: input_number.acs_boost_target_temp
+          - entity: input_number.heating_boost_offset
+          - entity: input_number.cooldown_minutes_between_boosts
+          - type: divider
+          - entity: input_datetime.last_boost_end
+
+      - type: entities
+        title: Pompa di calore
+        entities:
+          - entity: climate.boschcom_k30_101794077_hc1   # REPLACE
+          - entity: water_heater.boschcom_k30_101794077_dhw1    # REPLACE
+          - entity: sensor.boschcom_k30_101794077_dhw1_sensor    # REPLACE
+
+  - title: Energy native
+    path: energy-native
+    icon: mdi:chart-bar
+    strategy:
+      type: energy

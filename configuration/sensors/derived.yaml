@@ -1,0 +1,81 @@
+# Template sensor: consumo casa e surplus FV.
+# Convenzione segno HomeWizard P1:
+#   active_power > 0 -> import dalla rete
+#   active_power < 0 -> export in rete (iniezione)
+# Quindi: home_consumption = solar_production + active_power
+# (active_power positivo aggiunge consumo, negativo lo sottrae perche' va in export)
+
+template:
+  - sensor:
+      - name: "Home consumption"
+        unique_id: home_consumption
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set pv = states('sensor.sb4_0_1av_41_576_grid_power') | float(0) %}
+          {% set grid = states('sensor.p1_meter_power') | float(0) %}
+          {{ (pv + grid) | round(0) }}
+        availability: >
+          {{
+            has_value('sensor.sb4_0_1av_41_576_grid_power')
+            and has_value('sensor.p1_meter_power')
+          }}
+
+      - name: "PV surplus"
+        unique_id: pv_surplus
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set grid = states('sensor.p1_meter_power') | float(0) %}
+          {{ ([-grid, 0] | max) | round(0) }}
+        availability: >
+          {{ has_value('sensor.p1_meter_power') }}
+
+      - name: "PV self consumption"
+        unique_id: pv_self_consumption
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set pv = states('sensor.sb4_0_1av_41_576_grid_power') | float(0) %}
+          {% set surplus = states('sensor.pv_surplus') | float(0) %}
+          {{ ([pv - surplus, 0] | max) | round(0) }}
+
+      - name: "Grid import"
+        unique_id: grid_import_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set grid = states('sensor.p1_meter_power') | float(0) %}
+          {{ ([grid, 0] | max) | round(0) }}
+
+      - name: "Surplus stable 5min"
+        unique_id: surplus_stable_5min
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.pv_surplus_avg_5min') | float(0) | round(0) }}
+        # Dipende dal sensor statistico sotto.
+
+sensor:
+  - platform: statistics
+    name: "PV surplus avg 5min"
+    unique_id: pv_surplus_avg_5min
+    entity_id: sensor.pv_surplus
+    state_characteristic: mean
+    max_age:
+      minutes: 5
+    sampling_size: 300
+
+  - platform: statistics
+    name: "PV surplus avg 15min"
+    unique_id: pv_surplus_avg_15min
+    entity_id: sensor.pv_surplus
+    state_characteristic: mean
+    max_age:
+      minutes: 15
+    sampling_size: 900

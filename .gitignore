@@ -1,0 +1,30 @@
+# HA secrets and credentials - never commit
+secrets.yaml
+.storage/
+*.token
+*.key
+*.crt
+*.pem
+
+# HA runtime/state
+home-assistant.log
+home-assistant_v2.db
+home-assistant_v2.db-*
+.uuid
+known_devices.yaml
+.cloud
+deps/
+tts/
+www/community/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Python (in case any custom_component lives here)
+__pycache__/
+*.pyc
+.venv/

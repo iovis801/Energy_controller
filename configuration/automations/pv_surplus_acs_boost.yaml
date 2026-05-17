@@ -1,0 +1,111 @@
+# Boost acqua calda sanitaria quando c'e' surplus FV stabile.
+# Logica: ACS e' la "batteria termica" piu' efficiente che hai - convertire 1 kWh
+# elettrico in 1 kWh termico in un serbatoio coibentato che resta caldo per ore.
+
+- id: pv_surplus_acs_boost_start
+  alias: "PV surplus - avvia boost ACS"
+  mode: single
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.pv_surplus_avg_5min
+      above: input_number.surplus_threshold_acs_boost
+      for:
+        minutes: 5
+  condition:
+    - condition: state
+      entity_id: input_boolean.optimizer_enabled
+      state: "on"
+    - condition: state
+      entity_id: input_boolean.acs_boost_active
+      state: "off"
+    - condition: time
+      after: "10:00:00"
+      before: "16:30:00"
+    # Non riavviare entro il cooldown
+    - condition: template
+      value_template: >
+        {% set last = states('input_datetime.last_boost_end') %}
+        {% if last in ['unknown', 'unavailable', ''] %}
+          true
+        {% else %}
+          {% set cooldown = states('input_number.cooldown_minutes_between_boosts') | int(30) %}
+          {{ (now() - as_datetime(last)).total_seconds() / 60 > cooldown }}
+        {% endif %}
+    # Non boostare se ACS gia' caldo
+    - condition: numeric_state
+      entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
+      below: 55
+  action:
+    # Snapshot stato corrente per restore successivo
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.acs_pre_boost_snapshot
+      data:
+        value: >
+          {{
+            {
+              'temperature': state_attr('water_heater.boschcom_k30_101794077_dhw1', 'temperature'),
+              'operation_mode': state_attr('water_heater.boschcom_k30_101794077_dhw1', 'operation_mode')
+            } | tojson
+          }}
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.acs_boost_active
+    # Imposta modo Comfort/Boost + temp target alta
+    - service: water_heater.set_operation_mode
+      target:
+        entity_id: water_heater.boschcom_k30_101794077_dhw1   # REPLACE: entity_id reale
+      data:
+        operation_mode: "Boost"   # REPLACE: valore reale dell'integrazione (Boost / Comfort / High Demand)
+    - service: water_heater.set_temperature
+      target:
+        entity_id: water_heater.boschcom_k30_101794077_dhw1   # REPLACE
+      data:
+        temperature: "{{ states('input_number.acs_boost_target_temp') | float(60) }}"
+    - service: logbook.log
+      data:
+        name: "Optimizer"
+        message: >
+          ACS boost avviato. Surplus 5min: {{ states('sensor.pv_surplus_avg_5min') }} W.
+          Target {{ states('input_number.acs_boost_target_temp') }} C.
+
+- id: pv_surplus_acs_boost_stop
+  alias: "PV surplus - ferma boost ACS"
+  mode: single
+  trigger:
+    # Stop se ACS arriva al target
+    - platform: numeric_state
+      entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
+      above: input_number.acs_boost_target_temp
+      for:
+        minutes: 1
+    # Stop se surplus crolla sotto soglia per > 5 min
+    - platform: numeric_state
+      entity_id: sensor.pv_surplus_avg_5min
+      below: 500
+      for:
+        minutes: 5
+    # Hard timeout: max 3h di boost
+    - platform: state
+      entity_id: input_boolean.acs_boost_active
+      to: "on"
+      for:
+        hours: 3
+  condition:
+    - condition: state
+      entity_id: input_boolean.acs_boost_active
+      state: "on"
+  action:
+    - service: script.restore_acs_state
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.acs_boost_active
+    - service: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.last_boost_end
+      data:
+        datetime: "{{ now() }}"
+    - service: logbook.log
+      data:
+        name: "Optimizer"
+        message: "ACS boost terminato. Trigger: {{ trigger.platform }}/{{ trigger.entity_id | default('') }}."

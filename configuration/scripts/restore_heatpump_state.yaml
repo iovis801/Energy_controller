@@ -1,0 +1,69 @@
+# Script di restore: legge lo snapshot salvato pre-boost e riporta la PdC
+# allo stato originale. Usato dalle automazioni pv_surplus_acs_boost e
+# pv_surplus_heating al termine del boost.
+
+restore_acs_state:
+  alias: "Ripristina stato ACS pre-boost"
+  sequence:
+    - variables:
+        snapshot_raw: "{{ states('input_text.acs_pre_boost_snapshot') }}"
+        snapshot: >
+          {% if snapshot_raw and snapshot_raw not in ['unknown', 'unavailable', ''] %}
+            {{ snapshot_raw | from_json }}
+          {% else %}
+            {}
+          {% endif %}
+    - choose:
+        - conditions: "{{ snapshot.operation_mode is defined }}"
+          sequence:
+            - service: water_heater.set_operation_mode
+              target:
+                entity_id: water_heater.boschcom_k30_101794077_dhw1   # REPLACE
+              data:
+                operation_mode: "{{ snapshot.operation_mode }}"
+        - conditions: "{{ snapshot.operation_mode is not defined }}"
+          sequence:
+            # Fallback se snapshot non disponibile: torna a Eco+
+            - service: water_heater.set_operation_mode
+              target:
+                entity_id: water_heater.boschcom_k30_101794077_dhw1   # REPLACE
+              data:
+                operation_mode: "Eco+"   # REPLACE con valore reale dell'integrazione
+    - choose:
+        - conditions: "{{ snapshot.temperature is defined and snapshot.temperature != none }}"
+          sequence:
+            - service: water_heater.set_temperature
+              target:
+                entity_id: water_heater.boschcom_k30_101794077_dhw1   # REPLACE
+              data:
+                temperature: "{{ snapshot.temperature }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.acs_pre_boost_snapshot
+      data:
+        value: ""
+
+restore_heating_state:
+  alias: "Ripristina stato riscaldamento pre-boost"
+  sequence:
+    - variables:
+        snapshot_raw: "{{ states('input_text.heating_pre_boost_snapshot') }}"
+        snapshot: >
+          {% if snapshot_raw and snapshot_raw not in ['unknown', 'unavailable', ''] %}
+            {{ snapshot_raw | from_json }}
+          {% else %}
+            {}
+          {% endif %}
+    - choose:
+        - conditions: "{{ snapshot.temperature is defined and snapshot.temperature != none }}"
+          sequence:
+            - service: climate.set_temperature
+              target:
+                entity_id: climate.boschcom_k30_101794077_hc1   # REPLACE
+              data:
+                temperature: "{{ snapshot.temperature }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.heating_pre_boost_snapshot
+      data:
+        value: ""

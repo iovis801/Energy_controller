@@ -1,0 +1,104 @@
+# Boost riscaldamento durante surplus FV.
+# Logica: aumentare di +1.5 C il setpoint quando c'e' sole prolungato sfrutta
+# l'inerzia termica della casa come "batteria gratuita". La massa muraria
+# trattiene il calore e riduce il fabbisogno serale (quando il FV non produce).
+
+- id: pv_surplus_heating_boost_start
+  alias: "PV surplus - avvia boost riscaldamento"
+  mode: single
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.pv_surplus_avg_15min
+      above: input_number.surplus_threshold_heatpump
+      for:
+        minutes: 10
+  condition:
+    - condition: state
+      entity_id: input_boolean.optimizer_enabled
+      state: "on"
+    - condition: state
+      entity_id: input_boolean.heating_boost_active
+      state: "off"
+    # Solo se temperatura esterna fa pensare che la PdC sia attiva
+    - condition: numeric_state
+      entity_id: sensor.boschcom_k30_101794077_outdoor_temp_sensor
+      below: 14
+    # Solo stagione invernale
+    - condition: template
+      value_template: "{{ now().month in [10, 11, 12, 1, 2, 3, 4] }}"
+    # Cooldown
+    - condition: template
+      value_template: >
+        {% set last = states('input_datetime.last_boost_end') %}
+        {% if last in ['unknown', 'unavailable', ''] %}
+          true
+        {% else %}
+          {% set cooldown = states('input_number.cooldown_minutes_between_boosts') | int(30) %}
+          {{ (now() - as_datetime(last)).total_seconds() / 60 > cooldown }}
+        {% endif %}
+  action:
+    # Snapshot setpoint corrente
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.heating_pre_boost_snapshot
+      data:
+        value: >
+          {{
+            {
+              'temperature': state_attr('climate.boschcom_k30_101794077_hc1', 'temperature'),
+              'hvac_mode': states('climate.boschcom_k30_101794077_hc1')
+            } | tojson
+          }}
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.heating_boost_active
+    - service: climate.set_temperature
+      target:
+        entity_id: climate.boschcom_k30_101794077_hc1   # REPLACE
+      data:
+        temperature: >
+          {% set current = state_attr('climate.boschcom_k30_101794077_hc1', 'temperature') | float(20) %}
+          {% set offset = states('input_number.heating_boost_offset') | float(1.5) %}
+          {{ (current + offset) | round(1) }}
+    - service: logbook.log
+      data:
+        name: "Optimizer"
+        message: >
+          Boost riscaldamento avviato. Surplus 15min: {{ states('sensor.pv_surplus_avg_15min') }} W.
+          T_est: {{ states('sensor.boschcom_k30_101794077_outdoor_temp_sensor') }} C.
+
+- id: pv_surplus_heating_boost_stop
+  alias: "PV surplus - ferma boost riscaldamento"
+  mode: single
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.pv_surplus_avg_15min
+      below: 500
+      for:
+        minutes: 15
+    - platform: state
+      entity_id: input_boolean.heating_boost_active
+      to: "on"
+      for:
+        hours: 4
+    # Stop la sera (anche se condizioni residue rimangono)
+    - platform: time
+      at: "17:00:00"
+  condition:
+    - condition: state
+      entity_id: input_boolean.heating_boost_active
+      state: "on"
+  action:
+    - service: script.restore_heating_state
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.heating_boost_active
+    - service: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.last_boost_end
+      data:
+        datetime: "{{ now() }}"
+    - service: logbook.log
+      data:
+        name: "Optimizer"
+        message: "Boost riscaldamento terminato. Trigger: {{ trigger.platform }}/{{ trigger.entity_id | default('') }}."

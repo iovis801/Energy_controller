@@ -1,0 +1,89 @@
+input_number:
+  surplus_threshold_heatpump:
+    name: "Soglia surplus per boost riscaldamento (W)"
+    min: 500
+    max: 5000
+    step: 100
+    initial: 1500
+    unit_of_measurement: W
+    icon: mdi:transmission-tower-export
+
+  surplus_threshold_acs_boost:
+    name: "Soglia surplus per boost ACS (W)"
+    min: 500
+    max: 5000
+    step: 100
+    initial: 2000
+    unit_of_measurement: W
+    icon: mdi:water-boiler
+
+  surplus_threshold_notify:
+    name: "Soglia surplus per notifica carichi manuali (W)"
+    min: 200
+    max: 3000
+    step: 100
+    initial: 1000
+    unit_of_measurement: W
+    icon: mdi:bell-outline
+
+  min_surplus_duration_minutes:
+    name: "Durata minima surplus prima di attivare (min)"
+    min: 1
+    max: 30
+    step: 1
+    initial: 5
+    unit_of_measurement: min
+
+  acs_boost_target_temp:
+    name: "Target ACS durante boost (C)"
+    min: 45
+    max: 65
+    step: 1
+    initial: 60
+    unit_of_measurement: "°C"
+
+  heating_boost_offset:
+    name: "Offset setpoint riscaldamento durante surplus (C)"
+    min: 0.5
+    max: 3.0
+    step: 0.5
+    initial: 1.5
+    unit_of_measurement: "°C"
+
+  cooldown_minutes_between_boosts:
+    name: "Cooldown tra boost consecutivi (min)"
+    min: 10
+    max: 120
+    step: 5
+    initial: 30
+    unit_of_measurement: min
+
+input_boolean:
+  optimizer_enabled:
+    name: "Ottimizzatore surplus attivo"
+    icon: mdi:auto-fix
+
+  acs_boost_active:
+    name: "Boost ACS in corso"
+    icon: mdi:water-boiler-alert
+
+  heating_boost_active:
+    name: "Boost riscaldamento in corso"
+    icon: mdi:radiator
+
+input_text:
+  acs_pre_boost_snapshot:
+    name: "Snapshot ACS pre-boost (temp + mode)"
+    max: 64
+    initial: ""
+
+  heating_pre_boost_snapshot:
+    name: "Snapshot riscaldamento pre-boost (setpoint + mode)"
+    max: 64
+    initial: ""
+
+input_datetime:
+  last_boost_end:
+    name: "Fine ultimo boost"
+    has_date: true
+    has_time: true
