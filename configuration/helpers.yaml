@@ -46,3 +46,4 @@ input_boolean:
   optimizer_enabled:
     name: "Ottimizzatore ACS attivo"
     icon: mdi:auto-fix
+    initial: true
