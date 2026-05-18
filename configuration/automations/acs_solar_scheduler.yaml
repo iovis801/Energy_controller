@@ -1,23 +1,24 @@
-# ACS solar-following scheduler.
+# ACS solar-following scheduler (v3 - SOLO Off e Eco+).
 #
-# Obiettivo: spostare la produzione di acqua calda dalla notte (default Eco+
-# della PdC) alle ore di sole, MANTENENDO lo stesso volume di kWh termici
-# prodotti al giorno. Niente target piu' alti, niente boost piu' lunghi -
-# solo timing diverso.
+# IMPORTANTE: stesso consumo totale, solo timing diverso.
+# Non si forza mai un target piu' alto (NIENTE modo Comfort).
+# La logica e' "blocca/sblocca Eco+", lasciando alla PdC il suo target naturale.
 #
-# State machine giornaliera (default, regolabile via helpers):
-#   00:00-09:00  Off          (sopprime riscaldamento notturno)
-#   10:00        Comfort      (se forecast solar OK e ACS sotto target)
-#   anytime      Off          (quando ACS raggiunge target naturale 47 C)
-#   15:00        Eco+         (top-up serale se la giornata era nuvolosa)
-#   22:00        Off          (chiude la finestra prima della notte)
+# State machine giornaliera:
+#   22:00         Off          Sopprime riscaldamento notturno.
+#   10:00         Eco+         Sblocca riscaldamento se forecast solare OK.
+#                              La PdC vede ACS sotto la sua soglia interna (~42 C
+#                              dopo 12h di perdite) e parte automaticamente,
+#                              scaldando al SUO target naturale (~46 C) durante
+#                              le ore di sole.
+#   15:00         Eco+         Fallback per giornate nuvolose (no-op se gia' Eco+).
+#   22:00         Off          Prossimo ciclo notte.
 #
-# Safety: se temp ACS scende sotto soglia (default 38 C), forza Eco+
-# indipendentemente dall'ora -> niente docce fredde.
+# Safety: se temp ACS scende sotto 38 C in qualunque momento -> forza Eco+.
 
 automation:
-  # 1. Soppressione notturna - solo se siamo gia' al target ed e' notte
-  # Fix D: skip if already Off (evita chiamata HomeCom inutile)
+  # 1. Soppressione notturna
+  # Niente da fare se la PdC e' gia' in Off (es. fermata da target_reached).
   - id: acs_night_suppression
     alias: "ACS: sopprimi riscaldamento notturno"
     mode: single
@@ -45,9 +46,11 @@ automation:
           message: >
             Notte: modo Off. ACS attuale {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
 
-  # 2. Finestra solare aperta - tenta riscaldamento se forecast solar dice OK
+  # 2. Sblocca Eco+ all'inizio della finestra solare
+  # Quando ri-abilitiamo Eco+, la PdC vede il tank sotto la sua soglia interna
+  # e parte spontaneamente. Heater al SUO target Eco+ (~46 C), non a target piu' alti.
   - id: acs_solar_window_open
-    alias: "ACS: avvia riscaldamento in finestra solare"
+    alias: "ACS: sblocca Eco+ in finestra solare"
     mode: single
     trigger:
       - platform: time
@@ -56,81 +59,16 @@ automation:
       - condition: state
         entity_id: input_boolean.optimizer_enabled
         state: "on"
-      # Forecast Solar deve prevedere produzione residua sufficiente
+      # Forecast residuo sufficiente per giustificare riattivazione mattutina.
       - condition: numeric_state
         entity_id: sensor.energy_production_today_remaining
         above: input_number.acs_min_forecast_kwh
-      # ACS deve essere sotto il target naturale (non e' gia' caldo)
-      - condition: numeric_state
-        entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
-        below: input_number.acs_target_temp_natural
-    action:
-      - service: water_heater.set_operation_mode
-        target:
-          entity_id: water_heater.boschcom_k30_101794077_waterheater
-        data:
-          operation_mode: "Comfort"
-      - service: logbook.log
-        data:
-          name: "ACS Scheduler"
-          message: >
-            Finestra solare aperta. Forecast residuo:
-            {{ states('sensor.energy_production_today_remaining') }} kWh.
-            ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C
-            -> Comfort.
-
-  # 3. Stop quando target naturale raggiunto - non sovrariscaldiamo
-  # Fix A: 10 minuti di buffer (era 1) per evitare stop prematuro causato
-  # da stratificazione termica vicino al probe (compressore ideale-cycle 10 min)
-  - id: acs_solar_target_reached
-    alias: "ACS: target raggiunto, ferma riscaldamento"
-    mode: single
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
-        above: input_number.acs_target_temp_natural
-        for:
-          minutes: 10
-    condition:
-      - condition: state
-        entity_id: input_boolean.optimizer_enabled
-        state: "on"
-      - condition: state
-        entity_id: water_heater.boschcom_k30_101794077_waterheater
-        state: "Comfort"
-    action:
-      - service: water_heater.set_operation_mode
-        target:
-          entity_id: water_heater.boschcom_k30_101794077_waterheater
-        data:
-          operation_mode: "Off"
-      - service: logbook.log
-        data:
-          name: "ACS Scheduler"
-          message: >
-            Target naturale raggiunto
-            ({{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C).
-            Stop riscaldamento.
-
-  # 4. Top-up serale - se la giornata era nuvolosa, Eco+ recupera prima di notte
-  # Fix B: parte solo se ACS sotto target naturale - 2 (es. 45 C)
-  # Evita switch inutile quando ACS gia' carica dal Comfort di mezzogiorno
-  - id: acs_evening_topup
-    alias: "ACS: finestra recupero serale"
-    mode: single
-    trigger:
-      - platform: time
-        at: "15:00:00"
-    condition:
-      - condition: state
-        entity_id: input_boolean.optimizer_enabled
-        state: "on"
-      # Solo se ACS effettivamente bisognosa di top-up
-      - condition: template
-        value_template: >
-          {% set current = states('sensor.boschcom_k30_101794077_dhw1_sensor') | float(99) %}
-          {% set target = states('input_number.acs_target_temp_natural') | float(47) %}
-          {{ current < (target - 2) }}
+      # Skip se gia' Eco+ (es. utente ha cambiato manualmente).
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: water_heater.boschcom_k30_101794077_waterheater
+            state: "Eco+"
     action:
       - service: water_heater.set_operation_mode
         target:
@@ -141,11 +79,43 @@ automation:
         data:
           name: "ACS Scheduler"
           message: >
-            Top-up serale: Eco+. ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
+            Finestra solare aperta. Forecast residuo:
+            {{ states('sensor.energy_production_today_remaining') }} kWh.
+            ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C
+            -> Eco+ (la PdC decide se scaldare in base al SUO threshold).
 
-  # 5. Safety fallback - mai docce fredde, override se ACS sotto soglia
-  # Fix C: buffer esteso a 5 min per evitare chatter su oscillazioni probe;
-  # la guard "not already Eco+" evita ri-trigger durante recovery
+  # 3. Fallback serale per giornate nuvolose
+  # Se forecast era basso al mattino, la PdC e' rimasta Off tutto il giorno.
+  # Le 15:00 e' l'ultima finestra utile prima della soppressione notturna delle 22.
+  - id: acs_evening_fallback
+    alias: "ACS: fallback Eco+ pomeridiano"
+    mode: single
+    trigger:
+      - platform: time
+        at: "15:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.optimizer_enabled
+        state: "on"
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: water_heater.boschcom_k30_101794077_waterheater
+            state: "Eco+"
+    action:
+      - service: water_heater.set_operation_mode
+        target:
+          entity_id: water_heater.boschcom_k30_101794077_waterheater
+        data:
+          operation_mode: "Eco+"
+      - service: logbook.log
+        data:
+          name: "ACS Scheduler"
+          message: >
+            Fallback pomeridiano: Eco+. ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
+
+  # 4. Safety fallback - mai docce fredde
+  # Se ACS sotto soglia di sicurezza, forza Eco+ indipendentemente dall'ora.
   - id: acs_safety_fallback
     alias: "ACS: safety fallback su temperatura critica"
     mode: single
