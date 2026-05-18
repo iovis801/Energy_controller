@@ -17,6 +17,7 @@
 
 automation:
   # 1. Soppressione notturna - solo se siamo gia' al target ed e' notte
+  # Fix D: skip if already Off (evita chiamata HomeCom inutile)
   - id: acs_night_suppression
     alias: "ACS: sopprimi riscaldamento notturno"
     mode: single
@@ -27,6 +28,11 @@ automation:
       - condition: state
         entity_id: input_boolean.optimizer_enabled
         state: "on"
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: water_heater.boschcom_k30_101794077_waterheater
+            state: "Off"
     action:
       - service: water_heater.set_operation_mode
         target:
@@ -74,6 +80,8 @@ automation:
             -> Comfort.
 
   # 3. Stop quando target naturale raggiunto - non sovrariscaldiamo
+  # Fix A: 10 minuti di buffer (era 1) per evitare stop prematuro causato
+  # da stratificazione termica vicino al probe (compressore ideale-cycle 10 min)
   - id: acs_solar_target_reached
     alias: "ACS: target raggiunto, ferma riscaldamento"
     mode: single
@@ -82,7 +90,7 @@ automation:
         entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
         above: input_number.acs_target_temp_natural
         for:
-          minutes: 1
+          minutes: 10
     condition:
       - condition: state
         entity_id: input_boolean.optimizer_enabled
@@ -105,6 +113,8 @@ automation:
             Stop riscaldamento.
 
   # 4. Top-up serale - se la giornata era nuvolosa, Eco+ recupera prima di notte
+  # Fix B: parte solo se ACS sotto target naturale - 2 (es. 45 C)
+  # Evita switch inutile quando ACS gia' carica dal Comfort di mezzogiorno
   - id: acs_evening_topup
     alias: "ACS: finestra recupero serale"
     mode: single
@@ -115,6 +125,12 @@ automation:
       - condition: state
         entity_id: input_boolean.optimizer_enabled
         state: "on"
+      # Solo se ACS effettivamente bisognosa di top-up
+      - condition: template
+        value_template: >
+          {% set current = states('sensor.boschcom_k30_101794077_dhw1_sensor') | float(99) %}
+          {% set target = states('input_number.acs_target_temp_natural') | float(47) %}
+          {{ current < (target - 2) }}
     action:
       - service: water_heater.set_operation_mode
         target:
@@ -128,6 +144,8 @@ automation:
             Top-up serale: Eco+. ACS: {{ states('sensor.boschcom_k30_101794077_dhw1_sensor') }} C.
 
   # 5. Safety fallback - mai docce fredde, override se ACS sotto soglia
+  # Fix C: buffer esteso a 5 min per evitare chatter su oscillazioni probe;
+  # la guard "not already Eco+" evita ri-trigger durante recovery
   - id: acs_safety_fallback
     alias: "ACS: safety fallback su temperatura critica"
     mode: single
@@ -136,7 +154,7 @@ automation:
         entity_id: sensor.boschcom_k30_101794077_dhw1_sensor
         below: input_number.acs_safety_min_temp
         for:
-          minutes: 2
+          minutes: 5
     condition:
       - condition: state
         entity_id: input_boolean.optimizer_enabled
