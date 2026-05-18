@@ -117,58 +117,133 @@ sudo nmcli connection up "<NomeWiFi>"
 Gia' installato se hai selezionato "Virtualization Host" in fase install. Altrimenti:
 
 ```bash
-sudo dnf install -y @virtualization
+sudo dnf install -y @virtualization libvirt-daemon-config-network virt-install virt-manager cockpit-machines
 sudo systemctl enable --now libvirtd
-sudo usermod -aG libvirt $USER
+sudo systemctl enable --now virtnetworkd
+sudo usermod -aG libvirt,kvm $USER
+sudo virsh net-autostart default
+sudo virsh net-start default
 # Rilogga per applicare il gruppo
 exit
 ```
 
-Scarica immagine HA OS:
+Verifica che il bridge virbr0 esista:
 
 ```bash
-cd /var/lib/libvirt/images
-# Cerca l'ultima release su https://github.com/home-assistant/operating-system/releases
-sudo curl -L -o haos.qcow2.xz \
-  https://github.com/home-assistant/operating-system/releases/download/<VERSION>/haos_ova-<VERSION>.qcow2.xz
-sudo unxz haos.qcow2.xz
-# Resize se vuoi piu' di 32 GB di default
-sudo qemu-img resize haos.qcow2 64G
+ip link show virbr0
+# State DOWN e' normale finche' nessuna VM lo usa
 ```
 
-Crea la VM (via Cockpit web UI o `virt-install`):
+### 7.bis Migrazione VM da Framework Desktop (preferito per Phase 2)
+
+Se hai gia' una VM HA OS funzionante sul Framework Desktop (Phase 1), copia il disco qcow2
+qui sullo Spectre invece di creare da zero. Cosi' mantieni tutte le configurazioni,
+integrazioni, automazioni, state senza dover rifare tutto.
+
+**Sul Framework**:
 
 ```bash
+# Spegni la VM (per coerenza del disk)
+sudo virsh shutdown homeassistant
+
+# Aspetta che termini (~30s)
+sudo virsh list --all | grep homeassistant
+# Deve mostrare "shut off"
+
+# Comprimi il qcow2 per trasferirla via USB stick / SCP / NAS
+sudo qemu-img convert -O qcow2 -c -p \
+  /var/lib/libvirt/images/haos.qcow2 \
+  ~/haos-migration.qcow2
+# (-c = compress, -p = progress)
+
+# Trasferiscila sullo Spectre (opzione A: scp se sshd attivo sullo Spectre)
+scp ~/haos-migration.qcow2 gio@<spectre-ip>:/tmp/
+
+# Opzione B: copia su NAS, poi mount dallo Spectre
+cp ~/haos-migration.qcow2 /mnt/nas/migration/
+
+# Opzione C: USB stick
+cp ~/haos-migration.qcow2 /run/media/gio/MyUSB/
+```
+
+**Sullo Spectre**:
+
+```bash
+# Sposta il qcow2 nella directory libvirt
+sudo mv /tmp/haos-migration.qcow2 /var/lib/libvirt/images/haos.qcow2
+sudo chown qemu:qemu /var/lib/libvirt/images/haos.qcow2
+
+# Verifica
+sudo qemu-img info /var/lib/libvirt/images/haos.qcow2
+
+# Crea la VM importando il disco esistente
+# IMPORTANTE: --boot uefi su Fedora 44 usa OVMF Secure Boot di default,
+# che RIGETTA HA OS (non e' firmata Microsoft). Specifichiamo esplicitamente
+# il firmware non-secure.
 sudo virt-install \
   --name homeassistant \
   --vcpus 2 \
   --memory 4096 \
-  --os-variant generic \
-  --disk path=/var/lib/libvirt/images/haos.qcow2,bus=virtio \
-  --network bridge=virbr0,model=virtio \
+  --osinfo linux2022 \
+  --disk /var/lib/libvirt/images/haos.qcow2,bus=virtio,format=qcow2 \
+  --network network=default,model=virtio \
   --import \
-  --boot uefi \
+  --boot loader=/usr/share/edk2/ovmf/OVMF_CODE.fd,loader.readonly=yes,loader.type=pflash,nvram.template=/usr/share/edk2/ovmf/OVMF_VARS.fd \
+  --graphics vnc,listen=127.0.0.1 \
   --noautoconsole
+
+# Aspetta ~60s che HA OS riprenda lo stato
+sleep 60
+sudo virsh list --all
+
+# Trova IP via DHCP libvirt default network
+sudo virsh net-dhcp-leases default
+
+# Set autostart (critico!)
+sudo virsh autostart homeassistant
+
+# Verifica
+sudo virsh dominfo homeassistant | grep -E "State|Autostart"
 ```
 
-Verifica:
+**Riconfigura SSH key per Optima** (la chiave precedente puntava al Framework, ora gira sullo
+Spectre con stesso indirizzo NAT):
 
 ```bash
-virsh list --all
-# Apri console grafica via Cockpit > Virtual Machines > homeassistant
+# In HA via Studio Code Server -> Terminal
+mkdir -p /root/.ssh
+echo "<chiave-pubblica-optima>" > /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+```
+
+### 7.ter Fresh install (alternativa se non hai una VM da migrare)
+
+```bash
+cd /var/lib/libvirt/images
+# Sostituisci <VERSION> con l'ultima release su:
+#   https://github.com/home-assistant/operating-system/releases
+sudo curl -L -o haos.qcow2.xz \
+  https://github.com/home-assistant/operating-system/releases/download/<VERSION>/haos_ova-<VERSION>.qcow2.xz
+sudo unxz haos.qcow2.xz
+sudo chown qemu:qemu haos.qcow2
+sudo qemu-img resize haos.qcow2 64G  # opzionale, default 32 GB
+
+# Stessa virt-install della migrazione (con OVMF non-secure)
+sudo virt-install \
+  --name homeassistant \
+  --vcpus 2 \
+  --memory 4096 \
+  --osinfo linux2022 \
+  --disk /var/lib/libvirt/images/haos.qcow2,bus=virtio,format=qcow2 \
+  --network network=default,model=virtio \
+  --import \
+  --boot loader=/usr/share/edk2/ovmf/OVMF_CODE.fd,loader.readonly=yes,loader.type=pflash,nvram.template=/usr/share/edk2/ovmf/OVMF_VARS.fd \
+  --graphics vnc,listen=127.0.0.1 \
+  --noautoconsole
+
+sleep 60
+sudo virsh net-dhcp-leases default
 # Aspetta onboarding HA (~5 min al primo boot)
-```
-
-Trova IP della VM:
-
-```bash
-virsh domifaddr homeassistant
-# Apri http://<ip-vm>:8123 nel browser
-```
-
-Imposta autostart:
-
-```bash
 sudo virsh autostart homeassistant
 ```
 
