@@ -1,5 +1,9 @@
-# Notifica push quando c'e' una finestra stabile di surplus, per carichi manuali
+# Notifica in-HA quando c'e' una finestra stabile di surplus, per carichi manuali
 # (lavatrice, lavastoviglie, asciugatrice, forno).
+#
+# Usa persistent_notification (sempre disponibile, mostra nel bell icon HA).
+# Quando l'utente installa la HA Companion App sul telefono, sostituire
+# persistent_notification.create con notify.mobile_app_<device-name>.
 
 automation:
   - id: pv_surplus_notify_window_open
@@ -16,19 +20,14 @@ automation:
         entity_id: input_boolean.optimizer_enabled
         state: "on"
     action:
-      - service: notify.mobile_app   # REPLACE: notify.mobile_app_<device-id>
+      - service: persistent_notification.create
         data:
+          notification_id: pv_surplus_window
           title: "Finestra surplus FV"
           message: >
             Surplus {{ states('sensor.pv_surplus_avg_15min') | int }} W stabile da 15 min.
             Buon momento per lavatrice/lavastoviglie/asciugatrice.
-          data:
-            tag: pv_surplus_window
-            channel: Energy
-            actions:
-              - action: URI
-                title: "Apri dashboard"
-                uri: "/lovelace/energy"
+            [Apri Energy dashboard](/lovelace/energy)
 
   - id: pv_surplus_notify_window_close
     alias: "PV surplus - finestra carichi manuali (chiude)"
@@ -40,8 +39,6 @@ automation:
         for:
           minutes: 10
     action:
-      - service: notify.mobile_app   # REPLACE
+      - service: persistent_notification.dismiss
         data:
-          message: clear_notification
-          data:
-            tag: pv_surplus_window
+          notification_id: pv_surplus_window
